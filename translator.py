@@ -56,7 +56,7 @@ class Translator:
         """
         # Указатель стека данных у нас в R4. Стек растет вниз.
         self.emit(Opcode.LD, 2, 4, 0, f"pop R2 (arg2)")
-        self.emit(Opcode.ADD, 4, 4, 1, "SP += 1") # R4 = R4 + 1
+        self.emit(Opcode.ADD, 4, 4, 1, "SP += 1")
 
         self.emit(Opcode.LD, 1, 4, 0, f"pop R1 (arg1)")
         self.emit(Opcode.ADD, 4, 4, 1, "SP += 1")
@@ -68,7 +68,6 @@ class Translator:
 
     def handle_number(self, num: int):
         """Помещает константу на вершину стека"""
-        # Загружаем число в R1
         addr = self.emit(Opcode.LDI, 1, 0, 0, f"LDI R1, {num}")
         self.instructions.append(struct.pack(">i", num))
 
@@ -76,6 +75,35 @@ class Translator:
 
         self.emit(Opcode.SUB, 4, 4, 1, "SP -= 1")
         self.emit(Opcode.ST, 1, 4, 0, "push R1 (num)")
+
+    def handle_memory(self, opcode: Opcode):
+        """
+        Операции с памятью.
+        @ (fetch) берет адрес с вершины стека, читает значение по этому адресу и кладет обратно на стек.
+        ! (store) берет адрес с вершины стека, затем значение, и пишет значение по адресу.
+        """
+        if opcode == Opcode.LD:
+            self.emit(Opcode.LD, 2, 4, 0, "pop addr to R2")
+            self.emit(Opcode.LD, 1, 2, 0, "R1 = MEM[R2]")
+            self.emit(Opcode.ST, 1, 4, 0, "push R1")
+
+        elif opcode == Opcode.ST:
+            self.emit(Opcode.LD, 2, 4, 0, "pop addr to R2")
+            self.emit(Opcode.ADD, 4, 4, 1, "SP += 1")
+            self.emit(Opcode.LD, 1, 4, 0, "pop val to R1")
+            self.emit(Opcode.ADD, 4, 4, 1, "SP += 1")
+            self.emit(Opcode.ST, 1, 2, 0, "MEM[R2] = R1")
+
+    def handle_io(self, opcode: Opcode):
+        """Ввод-вывод через порты (port-mapped I/O)"""
+        if opcode == Opcode.IN:
+            self.emit(Opcode.IN, 1, 0, 0, "IN R1, Port 0")
+            self.emit(Opcode.SUB, 4, 4, 1, "SP -= 1")
+            self.emit(Opcode.ST, 1, 4, 0, "push R1 (IN)")
+        elif opcode == Opcode.OUT:
+            self.emit(Opcode.LD, 1, 4, 0, "pop R1 to OUT")
+            self.emit(Opcode.ADD, 4, 4, 1, "SP += 1")
+            self.emit(Opcode.OUT, 1, 1, 0, "OUT R1, Port 1")
 
     def translate(self, text: str):
         tokens = self.parse_tokens(text)
@@ -93,7 +121,37 @@ class Translator:
                 op = BUILTIN_WORDS[token_lower]
                 if op in [Opcode.ADD, Opcode.SUB, Opcode.MUL, Opcode.DIV, Opcode.MOD, Opcode.CMP]:
                     self.handle_arithmetic(op)
-                # TODO Добавить память и порты
+                elif op in [Opcode.LD, Opcode.ST]:
+                    self.handle_memory(op)
+                elif op in [Opcode.IN, Opcode.OUT]:
+                    self.handle_io(op)
+
+            elif token_lower == "if":
+                self.emit(Opcode.LD, 1, 4, 0, "pop condition to R1")
+                self.emit(Opcode.ADD, 4, 4, 1, "SP += 1")
+                addr = self.emit(Opcode.JMP, 0, 1, 0, "JMP IF ZERO (stub)")
+                self.jump_stack.append(('if', addr))
+
+            elif token_lower == "else":
+                addr = self.emit(Opcode.JMP, 0, 0, 0, "JMP to end (stub)")
+                orig_type, orig_addr = self.jump_stack.pop()
+                if orig_type != 'if':
+                    raise ValueError("Unmatched 'else'")
+
+                target = len(self.instructions)
+                self.instructions[orig_addr] = struct.pack(">Biii", Opcode.JMP.value, target, 1, 0)
+
+                self.jump_stack.append(('else', addr))
+
+            elif token_lower == "then":
+                orig_type, orig_addr = self.jump_stack.pop()
+                target = len(self.instructions)
+                if orig_type == 'if':
+                    self.instructions[orig_addr] = struct.pack(">Biii", Opcode.JMP.value, target, 1, 0)
+                elif orig_type == 'else':
+                    self.instructions[orig_addr] = struct.pack(">Biii", Opcode.JMP.value, target, 0, 0)
+                else:
+                    raise ValueError("Unmatched 'then'")
 
             else:
                 try:
