@@ -44,3 +44,82 @@ class Translator:
             clean_text += line + " "
 
         return clean_text.split()
+
+    def handle_arithmetic(self, opcode: Opcode):
+        """
+        Форт берет два числа с вершины стека.
+        В RISC это:
+        1. Считываем верхний элемент стека (TOS) в R2, смещаем указатель стека (R4)
+        2. Считываем следующий элемент в R1, смещаем указатель (R4)
+        3. Выполняем операцию: R1 = R1 op R2
+        4. Кладем результат обратно на стек
+        """
+        # Указатель стека данных у нас в R4. Стек растет вниз.
+        self.emit(Opcode.LD, 2, 4, 0, f"pop R2 (arg2)")
+        self.emit(Opcode.ADD, 4, 4, 1, "SP += 1") # R4 = R4 + 1
+
+        self.emit(Opcode.LD, 1, 4, 0, f"pop R1 (arg1)")
+        self.emit(Opcode.ADD, 4, 4, 1, "SP += 1")
+
+        self.emit(opcode, 1, 1, 2, f"R1 = R1 {opcode.name} R2")
+
+        self.emit(Opcode.SUB, 4, 4, 1, "SP -= 1")
+        self.emit(Opcode.ST, 1, 4, 0, f"push R1 (result)")
+
+    def handle_number(self, num: int):
+        """Помещает константу на вершину стека"""
+        # Загружаем число в R1
+        addr = self.emit(Opcode.LDI, 1, 0, 0, f"LDI R1, {num}")
+        self.instructions.append(struct.pack(">i", num))
+
+        self.debug_log.append(f"0x{addr+1:04X} | [LDI IMM] {num}")
+
+        self.emit(Opcode.SUB, 4, 4, 1, "SP -= 1")
+        self.emit(Opcode.ST, 1, 4, 0, "push R1 (num)")
+
+    def translate(self, text: str):
+        tokens = self.parse_tokens(text)
+
+        # Начальная инициализация: установим SP (R4) на дно памяти (например, адрес 2047)
+        # Установим R5 (стек возврата/циклов) на адрес 4047
+        self.emit(Opcode.LDI, 4, 0, 0, "Init Data Stack Ptr")
+        self.instructions.append(struct.pack(">i", 2047))
+        self.debug_log.append(f"      | [IMM] 2047")
+
+        for token in tokens:
+            token_lower = token.lower()
+
+            if token_lower in BUILTIN_WORDS:
+                op = BUILTIN_WORDS[token_lower]
+                if op in [Opcode.ADD, Opcode.SUB, Opcode.MUL, Opcode.DIV, Opcode.MOD, Opcode.CMP]:
+                    self.handle_arithmetic(op)
+                # TODO Добавить память и порты
+
+            else:
+                try:
+                    num = int(token)
+                    self.handle_number(num)
+                except ValueError:
+                    print(f"Unknown token: {token}")
+
+        self.emit(Opcode.HLT, 0, 0, 0, "HALT")
+
+def main():
+    if len(sys.argv) < 3:
+        print("Usage: python translator.py <input.f> <output.bin>")
+        sys.exit(1)
+
+    input_file = sys.argv[1]
+    output_file = sys.argv[2]
+
+    with open(input_file, "r", encoding="utf-8") as f:
+        source_code = f.read()
+
+    translator = Translator()
+    translator.translate(source_code)
+
+    write_binary(output_file, translator.instructions, translator.debug_log)
+    print(f"Compiled {len(translator.instructions)} machine words to {output_file}")
+
+if __name__ == "__main__":
+    main()
