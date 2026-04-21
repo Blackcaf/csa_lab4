@@ -68,7 +68,7 @@ def write_binary(filepath: str, instructions: list[bytes], debug_log: list[str] 
 
     # лог-файл(опция binary)
     if debug_log:
-        with open(filepath + ".txt", "w", encodinf="utg-8") as f:
+        with open(filepath + ".txt", "w", encoding="utf-8") as f:
             for log_line in debug_log:
                 f.write(log_line + "\n")
 
